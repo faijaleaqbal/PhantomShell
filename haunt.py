@@ -67,7 +67,7 @@ try:  # `rich` is the only third-party dependency.
 except ImportError:  # pragma: no cover - exercised only on a bare interpreter
     _HAVE_RICH = False
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 # --------------------------------------------------------------------------- #
 # Configuration
@@ -238,6 +238,7 @@ _CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u206
 _SECRET_RULES = (
     (re.compile(r"(?i)\b(bearer)[ \t]+[A-Za-z0-9._~+/=-]{12,}"), r"\1 [REDACTED]"),
     (re.compile(r"\b(?:sk|rk)-[A-Za-z0-9_-]{16,}"), "[REDACTED]"),
+    (re.compile(r"\bgsk_[A-Za-z0-9]{20,}"), "[REDACTED]"),
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "[REDACTED]"),
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[REDACTED]"),
     (
@@ -295,7 +296,7 @@ def truncate_tail(text: str, limit: int) -> str:
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
-class OllamaUnavailable(RuntimeError):
+class GhostUnavailable(RuntimeError):
     """Ollama is missing, asleep, or answered with something unusable."""
 
 
@@ -330,28 +331,28 @@ class OllamaClient:
             except Exception:
                 pass
             if exc.code == 404 and "model" in detail.lower():
-                raise OllamaUnavailable(
+                raise GhostUnavailable(
                     f"the model '{self.model_used or self.model}' is not installed "
                     f"(ollama pull {self.model_used or self.model})"
                 ) from exc
             suffix = f": {detail}" if detail else ""
-            raise OllamaUnavailable(f"Ollama answered HTTP {exc.code}{suffix}") from exc
+            raise GhostUnavailable(f"Ollama answered HTTP {exc.code}{suffix}") from exc
         except urllib.error.URLError as exc:
             reason = getattr(exc, "reason", exc)
             if isinstance(reason, (socket.timeout, TimeoutError)):
-                raise OllamaUnavailable(f"the seance timed out after {self.timeout:g}s") from exc
-            raise OllamaUnavailable(f"no ghost answers at {self.host}") from exc
+                raise GhostUnavailable(f"the seance timed out after {self.timeout:g}s") from exc
+            raise GhostUnavailable(f"no ghost answers at {self.host}") from exc
         except (TimeoutError, socket.timeout) as exc:
-            raise OllamaUnavailable(f"the seance timed out after {self.timeout:g}s") from exc
+            raise GhostUnavailable(f"the seance timed out after {self.timeout:g}s") from exc
         except OSError as exc:
-            raise OllamaUnavailable(f"the connection to {self.host} died ({exc.__class__.__name__})") from exc
+            raise GhostUnavailable(f"the connection to {self.host} died ({exc.__class__.__name__})") from exc
 
         try:
             parsed = json.loads(body)
         except json.JSONDecodeError as exc:
-            raise OllamaUnavailable("Ollama returned a reply that was not JSON") from exc
+            raise GhostUnavailable("Ollama returned a reply that was not JSON") from exc
         if not isinstance(parsed, dict):
-            raise OllamaUnavailable("Ollama returned an unexpected payload")
+            raise GhostUnavailable("Ollama returned an unexpected payload")
         return parsed
 
     def resolve_model(self) -> str:
@@ -362,7 +363,7 @@ class OllamaClient:
         try:
             # Probing /api/tags must never double the shell's wait.
             listing = self._request_json("/api/tags", timeout=min(self.timeout, 2.0))
-        except OllamaUnavailable:
+        except GhostUnavailable:
             # The daemon may be reachable but /api/tags unsupported; let the
             # generate call decide, using the documented default.
             return FALLBACK_MODEL
@@ -382,7 +383,7 @@ class OllamaClient:
         return installed[0] if installed else FALLBACK_MODEL
 
     def generate(self, prompt: str) -> "GhostReply":
-        """Ask the ghost for a whisper and a fix. Raises OllamaUnavailable."""
+        """Ask the ghost for a whisper and a fix. Raises GhostUnavailable."""
         self.model_used = self.resolve_model()
         payload = {
             "model": self.model_used,
@@ -400,8 +401,221 @@ class OllamaClient:
         data = self._request_json("/api/generate", payload)
         raw = data.get("response")
         if not isinstance(raw, str) or not raw.strip():
-            raise OllamaUnavailable("the model returned silence")
+            raise GhostUnavailable("the model returned silence")
         return parse_reply(raw)
+
+
+# --------------------------------------------------------------------------- #
+# Optional cloud backends (OpenAI-compatible)
+# --------------------------------------------------------------------------- #
+
+#: Providers that speak the OpenAI `/chat/completions` dialect. Groq is the
+#: headline option because it is fast and has a free tier; the others are here
+#: so one adapter covers most of the ecosystem.
+PROVIDERS: dict[str, "ProviderConfig"] = {}
+
+
+@dataclass(frozen=True)
+class ProviderConfig:
+    name: str
+    base_url: str
+    default_model: str
+    key_envs: tuple[str, ...]
+
+
+PROVIDERS.update(
+    {
+        "groq": ProviderConfig(
+            "groq",
+            "https://api.groq.com/openai/v1",
+            "openai/gpt-oss-20b",
+            ("GROQ_API_KEY",),
+        ),
+        "openai": ProviderConfig(
+            "openai",
+            "https://api.openai.com/v1",
+            "gpt-4o-mini",
+            ("OPENAI_API_KEY",),
+        ),
+        "openrouter": ProviderConfig(
+            "openrouter",
+            "https://openrouter.ai/api/v1",
+            "meta-llama/llama-3.3-70b-instruct",
+            ("OPENROUTER_API_KEY",),
+        ),
+        "gemini": ProviderConfig(
+            "gemini",
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+            "gemini-2.5-flash",
+            ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+        ),
+        "deepseek": ProviderConfig(
+            "deepseek",
+            "https://api.deepseek.com/v1",
+            "deepseek-chat",
+            ("DEEPSEEK_API_KEY",),
+        ),
+        # Custom covers LM Studio, vLLM, LiteLLM and anything else that speaks
+        # the same dialect. Base URL and model must be supplied explicitly.
+        "custom": ProviderConfig("custom", "", "", ("PHANTOM_API_KEY",)),
+    }
+)
+
+# Cloud calls should respect HTTPS_PROXY, unlike the localhost Ollama client.
+_PROXY_OPENER = urllib.request.build_opener()
+
+
+@dataclass
+class CloudClient:
+    """Minimal OpenAI-compatible client (Groq, OpenAI, OpenRouter, Gemini...)."""
+
+    provider: str
+    base_url: str
+    api_key: str
+    model: str
+    timeout: float = DEFAULT_TIMEOUT
+    key_env: str = "PHANTOM_API_KEY"
+    model_used: str = ""
+
+    @property
+    def label(self) -> str:
+        return f"{self.provider}/{self.model_used or self.model}"
+
+    def _scrub(self, text: str) -> str:
+        """Never let an API key or terminal escape sequence reach the screen."""
+        if self.api_key:
+            text = text.replace(self.api_key, "[REDACTED]")
+        return truncate_tail(redact_secrets(strip_control_sequences(text or "")), 200)
+
+    def generate(self, prompt: str) -> "GhostReply":
+        url = f"{self.base_url.rstrip('/')}/chat/completions"
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.8,
+            "top_p": 0.92,
+            "max_tokens": 512,
+            "stream": False,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": f"PhantomShell/{__version__}",
+        }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            method="POST",
+            headers=headers,
+        )
+        try:
+            with _PROXY_OPENER.open(request, timeout=self.timeout) as response:
+                body = response.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", "replace")
+            except Exception:
+                pass
+            detail = self._scrub(detail)
+            if exc.code in (401, 403):
+                raise GhostUnavailable(
+                    f"{self.provider} rejected the API key (HTTP {exc.code}); check {self.key_env}"
+                ) from exc
+            if exc.code == 404:
+                raise GhostUnavailable(
+                    f"model '{self.model}' was not found on {self.provider}; "
+                    "set PHANTOM_MODEL to a model your key can use"
+                ) from exc
+            if exc.code == 429:
+                raise GhostUnavailable(f"{self.provider} is rate-limiting the seance (HTTP 429)") from exc
+            suffix = f": {detail}" if detail else ""
+            raise GhostUnavailable(f"{self.provider} answered HTTP {exc.code}{suffix}") from exc
+        except urllib.error.URLError as exc:
+            reason = getattr(exc, "reason", exc)
+            if isinstance(reason, (socket.timeout, TimeoutError)):
+                raise GhostUnavailable(f"the {self.provider} seance timed out after {self.timeout:g}s") from exc
+            raise GhostUnavailable(f"cannot reach {self.provider}") from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise GhostUnavailable(f"the {self.provider} seance timed out after {self.timeout:g}s") from exc
+        except OSError as exc:
+            raise GhostUnavailable(f"the connection to {self.provider} died ({exc.__class__.__name__})") from exc
+
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise GhostUnavailable(f"{self.provider} returned a reply that was not JSON") from exc
+        if not isinstance(data, dict):
+            raise GhostUnavailable(f"{self.provider} returned an unexpected payload")
+
+        choices = data.get("choices") or []
+        content = None
+        if choices and isinstance(choices[0], dict):
+            message = choices[0].get("message") or {}
+            content = message.get("content")
+        if isinstance(content, list):  # newer APIs may return content parts
+            content = "".join(
+                part.get("text", "") for part in content if isinstance(part, dict)
+            )
+        if not isinstance(content, str) or not content.strip():
+            raise GhostUnavailable("the model returned silence")
+
+        self.model_used = self.model
+        return parse_reply(content)
+
+
+def make_client(args: argparse.Namespace) -> "OllamaClient | CloudClient":
+    """Choose a backend from flags + environment. Raises GhostUnavailable."""
+    provider = (getattr(args, "provider", None) or "auto").strip().lower()
+    if provider == "auto":
+        # Groq is the documented cloud default; without a key we stay local.
+        provider = "groq" if os.environ.get("GROQ_API_KEY", "").strip() else "ollama"
+
+    if provider == "ollama":
+        return OllamaClient(host=args.host, timeout=args.timeout, model=args.model)
+
+    config = PROVIDERS.get(provider)
+    if config is None:
+        raise GhostUnavailable(f"unknown provider '{provider}'")
+
+    base_url = (
+        getattr(args, "api_base", "") or os.environ.get("PHANTOM_API_BASE", "") or config.base_url
+    ).rstrip("/")
+    if not base_url:
+        raise GhostUnavailable(f"provider '{provider}' needs PHANTOM_API_BASE")
+
+    api_key = ""
+    for env_name in config.key_envs:
+        api_key = os.environ.get(env_name, "").strip()
+        if api_key:
+            break
+    if not api_key:
+        api_key = os.environ.get("PHANTOM_API_KEY", "").strip()
+    if not api_key and provider != "custom":
+        raise GhostUnavailable(
+            f"no API key for {provider}; set {config.key_envs[0]} or PHANTOM_API_KEY"
+        )
+
+    model = (args.model or "").strip()
+    if not model or model.lower() == "auto":
+        model = config.default_model
+    if not model:
+        raise GhostUnavailable(f"provider '{provider}' needs PHANTOM_MODEL")
+
+    return CloudClient(
+        provider=provider,
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        timeout=args.timeout,
+        key_env=config.key_envs[0],
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -909,10 +1123,10 @@ def build_haunt(args: argparse.Namespace, rng: random.Random) -> Haunt:
         fix = omen.fix
         note = omen.hint
     else:
-        client = OllamaClient(host=args.host, timeout=args.timeout, model=args.model)
         try:
+            client = make_client(args)
             reply = client.generate(build_prompt(command, error, shell, cwd))
-        except OllamaUnavailable as exc:
+        except GhostUnavailable as exc:
             offline = True
             whisper = rng.choice(OFFLINE_WHISPERS[omen.category])
             fix = omen.fix
@@ -921,7 +1135,10 @@ def build_haunt(args: argparse.Namespace, rng: random.Random) -> Haunt:
         else:
             whisper = reply.commentary or rng.choice(OFFLINE_WHISPERS["generic"])
             fix = reply.fix or omen.fix
-            model_label = client.model_used or "unknown model"
+            if isinstance(client, CloudClient):
+                model_label = client.label
+            else:
+                model_label = client.model_used or "unknown model"
             if not reply.fix and omen.fix:
                 note = "The whisper trailed off; the bones supplied the command."
             elif omen.hint and reply.fix:
@@ -964,9 +1181,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="the error output, or a string like 'exit code 127'",
     )
     parser.add_argument(
+        "--provider",
+        default=os.environ.get("PHANTOM_PROVIDER", "auto"),
+        choices=("auto", "ollama", *PROVIDERS),
+        help=(
+            "backend to consult: auto, ollama, or a cloud provider "
+            "(default: %(default)s; auto uses Groq when GROQ_API_KEY is set)"
+        ),
+    )
+    parser.add_argument(
         "--model",
         default=os.environ.get("PHANTOM_MODEL", "auto"),
-        help="Ollama model name, or auto (default: %(default)s)",
+        help="model name, or auto to let the provider choose (default: %(default)s)",
     )
     parser.add_argument(
         "--host",
@@ -974,12 +1200,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Ollama base URL (default: %(default)s)",
     )
     parser.add_argument(
+        "--api-base",
+        default=os.environ.get("PHANTOM_API_BASE", ""),
+        help="override the cloud provider base URL (OpenAI-compatible)",
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=DEFAULT_TIMEOUT,
         help="seconds to wait for the ghost (default: %(default)s)",
     )
-    parser.add_argument("--offline", action="store_true", help="never call Ollama; use the omen engine")
+    parser.add_argument("--offline", action="store_true", help="never call a model; use the omen engine")
     parser.add_argument("--demo", action="store_true", help="use a built-in failing scenario")
     parser.add_argument(
         "--night-whisper",

@@ -7,6 +7,7 @@ Everything here runs offline: no Ollama daemon, no network, no terminal needed.
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import io
 import json
@@ -64,6 +65,11 @@ class TextHygieneTests(unittest.TestCase):
         self.assertIn("Bearer [REDACTED]", cleaned)
         self.assertNotIn("supersecret123", cleaned)
         self.assertNotIn("hunter2", cleaned)
+
+    def test_redacts_groq_keys(self) -> None:
+        cleaned = haunt.redact_secrets("key gsk_" + "a1" * 20)
+        self.assertNotIn("gsk_", cleaned)
+        self.assertIn("[REDACTED]", cleaned)
 
     def test_clean_evidence_keeps_the_tail(self) -> None:
         self.assertEqual(haunt.clean_evidence("x" * 50, 10), "..." + "x" * 10)
@@ -216,7 +222,264 @@ class _FakeOllama(BaseHTTPRequestHandler):
         self._json({"model": payload.get("model"), "response": self.response, "done": True})
 
 
-class NightWhisperTests(unittest.TestCase):
+_CLOUD_REPLY = (
+    "The wire hums: a letter was dropped at the door.\n"
+    "```bash\n"
+    "git status\n"
+    "```"
+)
+
+
+class _FakeOpenAI(BaseHTTPRequestHandler):
+    """A stand-in for Groq/OpenAI `/chat/completions`, used only by the tests."""
+
+    reply: str = _CLOUD_REPLY
+    error_status: int = 200
+    error_body: str = ""
+    last_auth: str = ""
+    last_payload: dict = {}
+
+    def log_message(self, *args) -> None:  # silence test output
+        pass
+
+    def _json(self, payload: dict | str, status: int = 200) -> None:
+        raw = payload if isinstance(payload, str) else json.dumps(payload)
+        body = raw.encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        _FakeOpenAI.last_payload = json.loads(self.rfile.read(length) or b"{}")
+        _FakeOpenAI.last_auth = self.headers.get("Authorization", "")
+        if _FakeOpenAI.error_status != 200:
+            self._json(_FakeOpenAI.error_body or "{}", _FakeOpenAI.error_status)
+            return
+        self._json(
+            {
+                "id": "chatcmpl-test",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": _FakeOpenAI.reply}}
+                ],
+            }
+        )
+
+
+class CloudClientTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeOpenAI)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.base = f"http://127.0.0.1:{cls.server.server_address[1]}/v1"
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def setUp(self) -> None:
+        _FakeOpenAI.reply = _CLOUD_REPLY
+        _FakeOpenAI.error_status = 200
+        _FakeOpenAI.error_body = ""
+        _FakeOpenAI.last_auth = ""
+        _FakeOpenAI.last_payload = {}
+
+    def client(self, **kwargs) -> "haunt.CloudClient":
+        defaults = dict(
+            provider="groq",
+            base_url=self.base,
+            api_key="gsk_test_key",
+            model="openai/gpt-oss-20b",
+            timeout=3,
+            key_env="GROQ_API_KEY",
+        )
+        defaults.update(kwargs)
+        return haunt.CloudClient(**defaults)
+
+    def test_generate_sends_bearer_token_and_parses_reply(self) -> None:
+        client = self.client()
+        reply = client.generate("prompt")
+        self.assertEqual(reply.fix, "git status")
+        self.assertEqual(_FakeOpenAI.last_auth, "Bearer gsk_test_key")
+        self.assertEqual(_FakeOpenAI.last_payload["model"], "openai/gpt-oss-20b")
+        self.assertEqual(client.label, "groq/openai/gpt-oss-20b")
+        roles = [m["role"] for m in _FakeOpenAI.last_payload["messages"]]
+        self.assertEqual(roles, ["system", "user"])
+
+    def test_401_mentions_the_key_variable(self) -> None:
+        _FakeOpenAI.error_status = 401
+        _FakeOpenAI.error_body = '{"error": {"message": "invalid api key"}}'
+        with self.assertRaises(haunt.GhostUnavailable) as ctx:
+            self.client().generate("prompt")
+        self.assertIn("401", str(ctx.exception))
+        self.assertIn("GROQ_API_KEY", str(ctx.exception))
+
+    def test_api_key_is_never_echoed_back(self) -> None:
+        _FakeOpenAI.error_status = 401
+        _FakeOpenAI.error_body = json.dumps({"error": "bad key gsk_test_key"})
+        with self.assertRaises(haunt.GhostUnavailable) as ctx:
+            self.client().generate("prompt")
+        self.assertNotIn("gsk_test_key", str(ctx.exception))
+
+    def test_429_is_a_rate_limit_message(self) -> None:
+        _FakeOpenAI.error_status = 429
+        with self.assertRaises(haunt.GhostUnavailable) as ctx:
+            self.client().generate("prompt")
+        self.assertIn("rate", str(ctx.exception).lower())
+
+    def test_404_points_at_the_model(self) -> None:
+        _FakeOpenAI.error_status = 404
+        with self.assertRaises(haunt.GhostUnavailable) as ctx:
+            self.client().generate("prompt")
+        self.assertIn("PHANTOM_MODEL", str(ctx.exception))
+
+    def test_unparseable_body_is_friendly(self) -> None:
+        _FakeOpenAI.reply = ""
+        with self.assertRaises(haunt.GhostUnavailable) as ctx:
+            self.client().generate("prompt")
+        self.assertIn("silence", str(ctx.exception))
+
+    def test_content_parts_are_joined(self) -> None:
+        parts = {
+            "choices": [
+                {
+                    "message": {
+                        "content": [{"type": "text", "text": "```bash\nls\n```"}],
+                    }
+                }
+            ]
+        }
+        with mock.patch.object(_FakeOpenAI, "do_POST", lambda self: self._json(parts)):
+            reply = self.client().generate("prompt")
+        self.assertEqual(reply.fix, "ls")
+
+    def test_full_cli_run_uses_the_cloud(self) -> None:
+        env = {"GROQ_API_KEY": "gsk_test_key"}
+        buf = io.StringIO()
+        with mock.patch.dict("os.environ", env, clear=False), contextlib.redirect_stdout(buf):
+            code = haunt.run(
+                [
+                    "gti status",
+                    "gti: command not found",
+                    "--provider",
+                    "groq",
+                    "--api-base",
+                    self.base,
+                    "--fix-only",
+                ],
+                console=make_console(),
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(buf.getvalue(), "git status\n")
+
+    def test_cli_labels_the_cloud_model(self) -> None:
+        env = {"GROQ_API_KEY": "gsk_test_key"}
+        console = make_console()
+        with mock.patch.dict("os.environ", env, clear=False):
+            haunt.run(
+                [
+                    "gti status",
+                    "gti: command not found",
+                    "--provider",
+                    "groq",
+                    "--api-base",
+                    self.base,
+                    "--seed",
+                    "3",
+                    "--no-flicker",
+                ],
+                console=console,
+            )
+        self.assertIn("groq/openai/gpt-oss-20b", console_text(console))
+
+    def test_cli_falls_back_to_bones_when_the_key_is_rejected(self) -> None:
+        _FakeOpenAI.error_status = 401
+        _FakeOpenAI.error_body = json.dumps({"error": "bad key gsk_test_key"})
+        env = {"GROQ_API_KEY": "gsk_test_key"}
+        console = make_console()
+        with mock.patch.dict("os.environ", env, clear=False), contextlib.redirect_stdout(io.StringIO()):
+            code = haunt.run(
+                [
+                    "gti status",
+                    "gti: command not found",
+                    "--provider",
+                    "groq",
+                    "--api-base",
+                    self.base,
+                    "--seed",
+                    "2",
+                    "--no-flicker",
+                ],
+                console=console,
+            )
+        out = console_text(console)
+        self.assertEqual(code, 0)
+        self.assertIn("git status", out)
+        self.assertIn("GROQ_API_KEY", out)
+        self.assertNotIn("gsk_test_key", out)
+
+
+class MakeClientTests(unittest.TestCase):
+    def args(self, **kwargs) -> "argparse.Namespace":
+        base = dict(
+            provider="auto",
+            api_base="http://127.0.0.1:1/v1",
+            model="auto",
+            host="http://127.0.0.1:1",
+            timeout=2,
+        )
+        base.update(kwargs)
+        return argparse.Namespace(**base)
+
+    def test_auto_without_keys_stays_local(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            client = haunt.make_client(self.args())
+        self.assertIsInstance(client, haunt.OllamaClient)
+
+    def test_auto_prefers_groq_when_key_exists(self) -> None:
+        with mock.patch.dict("os.environ", {"GROQ_API_KEY": "gsk_x"}, clear=True):
+            client = haunt.make_client(self.args())
+        self.assertIsInstance(client, haunt.CloudClient)
+        self.assertEqual(client.provider, "groq")
+        self.assertEqual(client.model, "openai/gpt-oss-20b")
+
+    def test_explicit_provider_without_key_is_unavailable(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(haunt.GhostUnavailable) as ctx:
+                haunt.make_client(self.args(provider="groq"))
+        self.assertIn("GROQ_API_KEY", str(ctx.exception))
+
+    def test_generic_key_works_for_any_provider(self) -> None:
+        with mock.patch.dict("os.environ", {"PHANTOM_API_KEY": "sk_x"}, clear=True):
+            client = haunt.make_client(self.args(provider="openai", model="gpt-4o-mini"))
+        self.assertEqual(client.api_key, "sk_x")
+        self.assertEqual(client.base_url, "http://127.0.0.1:1/v1")
+
+    def test_custom_provider_allows_an_empty_key(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            client = haunt.make_client(
+                self.args(provider="custom", model="local-ghost", api_base="http://127.0.0.1:1234/v1")
+            )
+        self.assertEqual(client.api_key, "")
+        self.assertEqual(client.model, "local-ghost")
+
+    def test_empty_model_on_custom_is_rejected(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(haunt.GhostUnavailable):
+                haunt.make_client(self.args(provider="custom", model="auto"))
+
+    def test_cli_passes_provider_flags_through(self) -> None:
+        args = haunt.parse_args(["--provider", "openai", "--api-base", "http://x/v1", "--model", "m"])
+        self.assertEqual(args.provider, "openai")
+        self.assertEqual(args.api_base, "http://x/v1")
+        self.assertEqual(args.model, "m")
+
+
+
     def test_silent_during_the_day(self) -> None:
         console = make_console()
         with mock.patch.object(haunt, "is_late_night", return_value=False):
@@ -267,7 +530,7 @@ class OllamaClientTests(unittest.TestCase):
     def test_missing_model_is_a_friendly_error(self) -> None:
         _FakeOllama.missing_model = True
         client = haunt.OllamaClient(host=self.host, timeout=3, model="ghost:1b")
-        with self.assertRaises(haunt.OllamaUnavailable) as ctx:
+        with self.assertRaises(haunt.GhostUnavailable) as ctx:
             client.generate("prompt")
         self.assertIn("ollama pull ghost:1b", str(ctx.exception))
 
@@ -278,7 +541,7 @@ class OllamaClientTests(unittest.TestCase):
         sock.close()  # nothing listens here now
 
         client = haunt.OllamaClient(host=f"http://127.0.0.1:{port}", timeout=1, model="auto")
-        with self.assertRaises(haunt.OllamaUnavailable) as ctx:
+        with self.assertRaises(haunt.GhostUnavailable) as ctx:
             client.generate("prompt")
         # Windows may answer a closed local port with a timeout instead of RST.
         message = str(ctx.exception)
@@ -335,10 +598,18 @@ class CliTests(unittest.TestCase):
         with mock.patch.object(
             haunt.OllamaClient,
             "generate",
-            side_effect=haunt.OllamaUnavailable("no ghost answers at http://127.0.0.1:1"),
+            side_effect=haunt.GhostUnavailable("no ghost answers at http://127.0.0.1:1"),
         ):
             code = haunt.run(
-                ["gti status", "gti: command not found", "--seed", "1", "--no-flicker"],
+                [
+                    "gti status",
+                    "gti: command not found",
+                    "--provider",
+                    "ollama",
+                    "--seed",
+                    "1",
+                    "--no-flicker",
+                ],
                 console=console,
             )
         out = console_text(console)

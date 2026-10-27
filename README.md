@@ -1,15 +1,17 @@
 # PhantomShell: The Haunted Terminal
 
-> An offline CLI ghost that haunts your shell when a command fails.
-> One eerie sentence, one exact fix — generated on your own machine.
+> An offline-first CLI ghost that haunts your shell when a command fails.
+> One eerie sentence, one exact fix — from your machine, or from a cloud API.
 
 PhantomShell watches your prompt. When a command exits non-zero, a digital ghost
 stirs: ASCII apparition, a dim green whisper about your mistakes, and a clean,
-copy-pasteable command that fixes the error. Everything runs locally through
-[Ollama](https://ollama.com) — no API keys, no telemetry, no network.
+copy-pasteable command that fixes the error. By default everything runs locally
+through [Ollama](https://ollama.com) — no API keys, no telemetry, no network.
+Flip one environment variable and the same ghost can consult Groq, OpenAI,
+OpenRouter, Gemini, DeepSeek or any OpenAI-compatible endpoint.
 
 Built for the **Ghost in the Machine** hackathon. Designed to survive a demo
-with the Wi-Fi off.
+with the Wi-Fi off — the omen engine needs no model at all.
 
 ```
        .-.
@@ -37,11 +39,12 @@ with the Wi-Fi off.
 
 | | |
 |---|---|
-| **Fully offline** | Talks only to `127.0.0.1:11434`. Proxies are explicitly bypassed so a local daemon never leaks through `HTTP_PROXY`. |
-| **Small models** | Auto-detects `qwen2.5-coder:1.5b` or `llama3.2:1b`, keeps them warm for 30 minutes. Fast on CPU. |
+| **Local by default** | Default backend is `127.0.0.1:11434`. Proxies are explicitly bypassed so a local daemon never leaks through `HTTP_PROXY`. |
+| **Cloud optional** | `--provider groq` (or `openai`, `openrouter`, `gemini`, `deepseek`, `custom`) uses one OpenAI-compatible adapter. Keys are read from env vars only, never stored or printed. |
+| **Small models** | Locally, auto-detects `qwen2.5-coder:1.5b` or `llama3.2:1b`, keeps them warm for 30 minutes. Fast on CPU. |
 | **Never executes anything** | It prints a suggested command. You decide whether to run it. |
 | **Never breaks your shell** | Always exits `0`, bounded timeout, no tracebacks, restores your exit code, skips `Ctrl+C`, one haunt per history entry. |
-| **Degrades in character** | If Ollama is asleep, a deterministic "omen engine" still fixes typos, missing Python modules, permissions, busy ports and bad paths. |
+| **Degrades in character** | If the model is asleep (or the API key is wrong), a deterministic "omen engine" still fixes typos, missing Python modules, permissions, busy ports and bad paths. |
 | **Night mode (opt-in)** | After midnight, the ghost may murmur a single dim line after a *successful* command. No model call, no interruption. |
 | **Terminal-injection aware** | Strips ANSI/OSC escapes and bidi controls from error text, redacts common credential shapes, and truncates before anything is printed or sent to the model. |
 
@@ -70,6 +73,25 @@ cd PhantomShell
 python -m pip install -r requirements.txt
 ```
 
+**2b. (Optional) Borrow a bigger brain from the cloud**
+
+Local models are charming but 1–1.5B params is small. Get a free key at
+[console.groq.com/keys](https://console.groq.com/keys), then export it in the
+same shell that runs the hook. Never paste the key into the repo.
+
+```bash
+export GROQ_API_KEY="gsk_..."        # bash / zsh
+```
+
+```powershell
+$env:GROQ_API_KEY = "gsk_..."        # PowerShell (current session)
+# or persist for the user: setx GROQ_API_KEY "gsk_..."
+```
+
+With `GROQ_API_KEY` present, `--provider auto` picks Groq automatically. Without
+it, the same command quietly stays on Ollama. Force either side with
+`--provider groq` / `--provider ollama`.
+
 **3. Wake the ghost**
 
 ```bash
@@ -80,11 +102,15 @@ python haunt.py --demo --offline
 python haunt.py "gti status" "gti: command not found"
 python haunt.py "python app.py" "ModuleNotFoundError: No module named 'yaml'"
 python haunt.py "npm run dev" "Error: listen EADDRINUSE: address already in use :::3000"
+
+# Live, cloud model (needs GROQ_API_KEY):
+python haunt.py "gti status" "gti: command not found" --provider groq
 ```
 
 > First inference after a cold start can take 5–15 s on CPU while the model
 > loads. Warm it once with `ollama run qwen2.5-coder:1.5b "hi"` before a demo,
 > or raise the timeout (`--timeout 30`). After that, `keep_alive` keeps it hot.
+> Cloud answers usually arrive in well under a second.
 
 ---
 
@@ -200,6 +226,27 @@ prompts, skips `Ctrl+C`, reads `PHANTOM_EXTRA_ARGS` live, and passes evidence
 through environment variables so quotes and Unicode survive Windows argument
 parsing.
 
+### Choosing the backend from the hook
+
+The hooks inherit your environment, so the simplest switch is the variable:
+
+```bash
+export GROQ_API_KEY="gsk_..."   # presence alone makes --provider auto choose Groq
+```
+
+Or pin it explicitly for one session (bash/zsh):
+
+```bash
+PHANTOM_EXTRA_ARGS="--provider groq --model openai/gpt-oss-20b"
+```
+
+```powershell
+$env:PHANTOM_EXTRA_ARGS = "--provider groq --model openai/gpt-oss-20b"
+```
+
+The bundled PowerShell hook reads `PHANTOM_EXTRA_ARGS` live, so the change
+applies to the next failed command without reloading the profile.
+
 ### Late-night murmurs (optional)
 
 The ghost can also acknowledge *successful* commands between 00:00 and 05:00 —
@@ -230,10 +277,12 @@ python haunt.py "<failed command>" "<error output or exit code>" [options]
 | Flag | What it does |
 |---|---|
 | `--demo` | Use a built-in failing scenario. Great for recordings. |
-| `--offline` | Never call Ollama; use the omen engine. |
+| `--offline` | Never call a model; use the omen engine only. |
+| `--provider NAME` | `auto` (default), `ollama`, `groq`, `openai`, `openrouter`, `gemini`, `deepseek`, `custom`. |
+| `--api-base URL` | Override the cloud base URL (OpenAI-compatible). Also `PHANTOM_API_BASE`. |
 | `--night-whisper` | Print one idle line if it is late (used by the hooks). |
 | `--fix-only` | Print **only** the corrected command (for clipboard/pipes). |
-| `--model NAME` | Model name, or `auto` (default) to pick an installed small model. |
+| `--model NAME` | Model name, or `auto` (default) to pick an installed local model / the provider default. |
 | `--host URL` | Ollama base URL (default `http://127.0.0.1:11434`). |
 | `--timeout SEC` | How long to wait for the ghost (default `10`). |
 | `--no-art` | Skip the ASCII apparition. |
@@ -270,22 +319,26 @@ very small model; treat its suggestions as advice, not authority.
       ▼
  haunt.py ── sanitize ANSI/OSC • redact secrets • truncate
       │
-      ├── Ollama reachable? ──yes──► POST /api/generate (local, tiny model)
+      ├── backend? ──local──► POST 127.0.0.1:11434/api/generate (tiny model)
+      │            └─cloud──► POST {base}/chat/completions (Groq/OpenAI/…)
       │                                  │
       │                                  ▼
       │                             parse one-sentence whisper + fenced fix
       │
-      └── no / timeout / bad JSON ──► deterministic omen engine + pre-baked whisper
-                                         │
-                                         ▼
-                                   rich render (art, panels, meta)
+      └── no / timeout / 401 / 429 / bad JSON ──► deterministic omen engine
+                                                   + pre-baked whisper
+                                                      │
+                                                      ▼
+                                                rich render (art, panels, meta)
 ```
 
 Fallback chain:
 
-1. **Explicit model** or **auto-detected** installed model (`/api/tags`).
-2. Any Ollama failure — refused connection, timeout, missing model, empty
-   response, malformed JSON — becomes a friendly reason plus the offline omen.
+1. **Explicit model** or **auto-detected** installed Ollama model (`/api/tags`),
+   or the provider's default cloud model.
+2. Any backend failure — refused connection, timeout, missing model, rejected
+   key, rate limit, empty response, malformed JSON — becomes a friendly reason
+   plus the offline omen.
 3. Anything unexpected is swallowed by `main()`; at worst you get one dim line,
    never a traceback in your prompt. Set `PHANTOM_DEBUG=1` while developing.
 
@@ -308,7 +361,12 @@ off:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `PHANTOM_MODEL` | `auto` | Model name, or auto-detect. |
+| `PHANTOM_PROVIDER` | `auto` | `auto`, `ollama`, `groq`, `openai`, `openrouter`, `gemini`, `deepseek`, `custom`. `auto` uses Groq only when `GROQ_API_KEY` is set. |
+| `GROQ_API_KEY` | unset | Groq key; also the signal `auto` looks for. |
+| `PHANTOM_API_KEY` | unset | Generic key for any cloud provider (fallback if the provider-specific var is missing). |
+| `PHANTOM_API_BASE` | provider default | Override the OpenAI-compatible base URL (e.g. LM Studio at `http://127.0.0.1:1234/v1`). |
+| `OPENAI_API_KEY` / `OPENROUTER_API_KEY` / `GEMINI_API_KEY` / `DEEPSEEK_API_KEY` | unset | Provider-specific keys. |
+| `PHANTOM_MODEL` | `auto` | Model name; `auto` means Ollama auto-detect or the provider default. |
 | `PHANTOM_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama base URL. |
 | `PHANTOM_TIMEOUT` | `10` | Seconds to wait; also `--timeout`. |
 | `PHANTOM_KEEP_ALIVE` | `30m` | How long Ollama keeps the model loaded. |
@@ -323,20 +381,49 @@ off:
 | `PHANTOM_DEBUG` | `0` | `1` shows tracebacks instead of the shroud message. |
 | `NO_COLOR` | unset | Standard colour opt-out, honoured by `rich`. |
 
+Provider defaults (override base URL and model with the variables above):
+
+| Provider | Base URL | Default model |
+|---|---|---|
+| `groq` | `https://api.groq.com/openai/v1` | `openai/gpt-oss-20b` |
+| `openai` | `https://api.openai.com/v1` | `gpt-4o-mini` |
+| `openrouter` | `https://openrouter.ai/api/v1` | `meta-llama/llama-3.3-70b-instruct` |
+| `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | `gemini-2.5-flash` |
+| `deepseek` | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| `custom` | you supply `PHANTOM_API_BASE` | you supply `PHANTOM_MODEL` |
+
+`custom` is for LM Studio, vLLM, LiteLLM and anything else that speaks the same
+dialect; it may run without a key:
+
+```bash
+PHANTOM_PROVIDER=custom \
+PHANTOM_API_BASE=http://127.0.0.1:1234/v1 \
+PHANTOM_MODEL=local-model \
+python haunt.py "gti status" "command not found"
+```
+
 ---
 
 ## Safety and privacy
 
-- **Local only.** Requests go to the configured Ollama host. The default client
-  has proxy handling disabled, so `HTTP_PROXY` cannot redirect a localhost call.
+- **Local by default.** With `--provider ollama` (or `auto` and no key) requests
+  go only to the configured Ollama host. That client explicitly disables proxies,
+  so `HTTP_PROXY` cannot redirect a localhost call.
+- **Cloud sends your error text.** When you opt into a cloud provider, the failed
+  command, error output, shell name and working directory are sent to that
+  provider's API. Sanitising and redaction happen first, but the vendor still
+  sees what is left. Use `--offline` or Ollama if the error may contain secrets.
+- **Keys stay in the environment.** API keys are read from variables, sent only
+  in the `Authorization` header, and scrubbed from error messages (a 401 body
+  that echoes the key cannot leak it to your prompt). Nothing is written to disk.
 - **No execution.** Nothing the model writes is ever run. There is no `eval`,
   no `subprocess`, no shell interpolation of model output.
 - **Sanitised input and output.** CSI/OSC escape sequences, C0/C1 controls and
   bidi overrides are stripped; the text is tail-truncated (compilers put the
   useful part last) before printing or sending.
-- **Secret redaction.** Bearer tokens, `sk-…`, `ghp_…`, AWS access key IDs and
-  `password=…`-style pairs are masked before the prompt leaves the process.
-  This is best-effort, not a guarantee — review what your errors contain.
+- **Secret redaction.** Bearer tokens, `sk-…`, `gsk_…`, `ghp_…`, AWS access key
+  IDs and `password=…`-style pairs are masked before the prompt leaves the
+  process. This is best-effort, not a guarantee — review what your errors contain.
 - **Injection aware.** Command and error text are wrapped in `<command>` /
   `<error>` tags, and the system prompt tells the model to treat them as
   evidence, never instructions.
@@ -351,6 +438,11 @@ off:
 |---|---|
 | `No ghost answers at http://127.0.0.1:11434` | Start Ollama: `ollama serve` (or launch the desktop app). |
 | `the model '…' is not installed` | `ollama pull qwen2.5-coder:1.5b` (or `llama3.2:1b`). |
+| `groq rejected the API key (HTTP 401)` | The key is wrong, expired, or has no access to that model. Re-create it at [console.groq.com/keys](https://console.groq.com/keys) and export it in this shell (`echo $env:GROQ_API_KEY` / `echo $GROQ_API_KEY`). |
+| `no API key for groq; set GROQ_API_KEY or PHANTOM_API_KEY` | Export the key, or pass `--provider ollama` / `--offline`. Keys are never read from a config file. |
+| `groq is rate-limiting the seance (HTTP 429)` | Free-tier limit hit. Wait a moment, use `--model openai/gpt-oss-120b` for a different bucket, or let it fall back to Ollama. |
+| `model '…' was not found on …` | Wrong model id for that provider. Set `PHANTOM_MODEL` to one your key can use, e.g. `openai/gpt-oss-20b` or `llama-3.3-70b-versatile` on Groq. |
+| Cloud answers but the hook still uses Ollama | The key is not in the environment the shell hook inherits. Export it in the same session, or set `PHANTOM_EXTRA_ARGS="--provider groq"`. |
 | First answer takes 10+ s | Cold model load. Warm it: `ollama run qwen2.5-coder:1.5b "hi"`, or `--timeout 30`. |
 | Ghost never appears | Check the hook is sourced (`echo $PROMPT_COMMAND` / `$PROFILE`), your command really failed, and the code is not in `PHANTOM_SKIP`. |
 | Ghost appears twice | Both the file hook and an inline snippet are active. Keep one. |
@@ -363,16 +455,18 @@ off:
 
 ## Tests
 
-No Ollama, no network, no TTY required — a fake daemon is part of the suite:
+No Ollama, no network, no TTY required — fake Ollama and fake OpenAI-compatible
+daemons are part of the suite:
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-41 tests cover escape-sequence stripping, secret redaction, truncation, reply
-parsing, every offline omen rule, the Ollama client (success, 404 model,
-refused connection), prompt construction, night whispers, and the CLI/fallback
-paths.
+59 tests cover escape-sequence stripping, secret redaction, truncation, reply
+parsing, every offline omen rule, the Ollama client (success, 404 model, refused
+connection), provider resolution (`auto` vs explicit, key precedence, custom
+endpoints), the cloud client (success, 401/429/404, key never leaked, content
+parts), prompt construction, night whispers, and the CLI/fallback paths.
 
 ---
 
@@ -380,7 +474,7 @@ paths.
 
 ```
 PhantomShell/
-├── haunt.py              # the ghost: CLI, Ollama client, omen engine, renderer
+├── haunt.py              # the ghost: CLI, Ollama + cloud clients, omen engine, renderer
 ├── shell/
 │   ├── phantom.bash      # bash + zsh hook (PROMPT_COMMAND / precmd)
 │   └── phantom.ps1       # PowerShell 5.1+ / 7+ prompt wrapper
@@ -397,18 +491,22 @@ PhantomShell/
 
 1. `python haunt.py --demo --offline` — instant, Wi-Fi off, still in character.
 2. `python haunt.py --demo` — same failure, now with the local model's whisper.
-3. In a real shell: `gti status` → the hook suggests `git status`.
-4. `python haunt.py "python app.py" "ModuleNotFoundError: No module named 'yaml'" --fix-only`
+3. `python haunt.py "gti status" "gti: command not found" --provider groq` — the
+   same ghost, cloud-fast (skip this if there is no `GROQ_API_KEY`).
+4. In a real shell: `gti status` → the hook suggests `git status`.
+5. `python haunt.py "python app.py" "ModuleNotFoundError: No module named 'yaml'" --fix-only`
    → copy-paste `python3 -m pip install pyyaml`.
-5. Kill Ollama (`Ctrl+C` in its terminal) and fail something again → the omen
+6. Kill Ollama (`Ctrl+C` in its terminal) and fail something again → the omen
    engine takes over instead of crashing the prompt.
 
 ---
 
 ## Limitations
 
-- 1–1.5B models are fast and charming, not omniscient. Cross-check destructive
-  suggestions (`rm`, `sudo`, `kill`) before running them.
+- 1–1.5B local models are fast and charming, not omniscient. Cross-check
+  destructive suggestions (`rm`, `sudo`, `kill`) before running them.
+- Cloud providers rename and retire models. If a cloud call starts failing with
+  HTTP 404, set `PHANTOM_MODEL` to a model your key can still use.
 - Default bash hooks do not see stderr (shell limitation); enable
   `PHANTOM_CAPTURE_STDERR=1` if you want the full error text.
 - Offline omen rules are intentionally conservative; unknown failures get an
