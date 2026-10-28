@@ -16,6 +16,9 @@ Designed to survive a demo with the Wi-Fi off — the omen engine needs no model
 
 ![PhantomShell haunting a shell](docs/phantomshell-demo.png)
 
+*Live run: `gemma3:4b` on an AMD laptop with no GPU, served locally by Ollama.
+The whisper above was written by the model; the fix below it was not.*
+
 ```
        .-.
       (o o)
@@ -363,6 +366,11 @@ off:
 - `Cannot find path …` / `No such file or directory` → list the parent directory
 - `exit code 130` → "The spell was interrupted", no invented fix
 - anything else → an honest "the bones are silent", no hallucinated command
+
+The same failure with Ollama stopped and the network unplugged — no model, no
+network, still in character:
+
+![PhantomShell's offline omen engine](docs/phantomshell-offline.png)
 
 ---
 
