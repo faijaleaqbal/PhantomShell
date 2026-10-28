@@ -78,10 +78,14 @@ Ollama usually runs as a background service. If not:
 ollama serve
 ```
 
-**2. Install the one Python dependency**
+**2. Install the package or dependencies**
 
 ```bash
 cd PhantomShell
+# Either install in editable mode (provides 'phantomshell' and 'haunt' commands):
+python -m pip install -e .
+
+# Or install dependencies only:
 python -m pip install -r requirements.txt
 ```
 
@@ -130,6 +134,23 @@ python haunt.py "gti status" "gti: command not found" --provider groq
 
 The hooks live in [`shell/`](shell/). They are small, dependency-free, and
 return your original exit status so your existing prompt/theme keeps working.
+
+### Automatic hook installation (fastest)
+
+PhantomShell can inspect your environment and safely install the hook into your shell's startup profile:
+
+```bash
+python haunt.py --install-hook         # auto-detects current shell
+python haunt.py --install-hook zsh     # or explicitly: bash, zsh, powershell, fish
+```
+
+To see the exact line without modifying any file:
+
+```bash
+python haunt.py --show-hook
+```
+
+---
 
 ### a) Bash or Zsh
 
@@ -238,6 +259,23 @@ prompts, skips `Ctrl+C`, reads `PHANTOM_EXTRA_ARGS` live, and passes evidence
 through environment variables so quotes and Unicode survive Windows argument
 parsing.
 
+### c) Fish shell (>= 3.0)
+
+Add one line to `~/.config/fish/config.fish`:
+
+```fish
+source "$HOME/PhantomShell/shell/phantom.fish"
+```
+
+Reload fish (`source ~/.config/fish/config.fish`), then test:
+
+```fish
+gti status
+```
+
+The fish hook connects to fish's native `fish_postexec` event, captures the exit code,
+and preserves `$status` for your existing prompt theme.
+
 ### Choosing the backend from the hook
 
 The hooks inherit your environment, so the simplest switch is the variable:
@@ -290,6 +328,8 @@ python haunt.py "<failed command>" "<error output or exit code>" [options]
 |---|---|
 | `--demo` | Use a built-in failing scenario. Great for recordings. |
 | `--offline` | Never call a model; use the omen engine only. |
+| `--install-hook [SHELL]` | Safely append the hook to your startup profile (`auto`, `bash`, `zsh`, `powershell`, `fish`). |
+| `--show-hook [SHELL]` | Print the exact shell hook configuration line without modifying files. |
 | `--provider NAME` | `auto` (default), `ollama`, `groq`, `openai`, `openrouter`, `gemini`, `deepseek`, `custom`. |
 | `--api-base URL` | Override the cloud base URL (OpenAI-compatible). Also `PHANTOM_API_BASE`. |
 | `--night-whisper` | Print one idle line if it is late (used by the hooks). |
@@ -361,8 +401,12 @@ off:
 
 - `gti status` → `git status` (fuzzy match against common commands)
 - `No module named 'yaml'` → `python3 -m pip install pyyaml` (import→PyPI map)
+- `Cannot find module 'express'` → `npm install express` (with pnpm/yarn detection)
 - `Permission denied` → `sudo …`, with special cases for Docker and SSH keys
 - `EADDRINUSE :::3000` → `lsof -i :3000`
+- `branch … has no upstream branch` → `git push --set-upstream origin <branch>`
+- `Cannot connect to Docker daemon` → `sudo systemctl start docker` (or Docker Desktop)
+- `error[E0432]: unresolved import 'serde'` → `cargo add serde` (Rust)
 - `Cannot find path …` / `No such file or directory` → list the parent directory
 - `exit code 130` → "The spell was interrupted", no invented fix
 - anything else → an honest "the bones are silent", no hallucinated command
@@ -477,13 +521,16 @@ daemons are part of the suite:
 
 ```bash
 python -m unittest discover -s tests -v
+# or with pytest:
+pytest -v
 ```
 
-59 tests cover escape-sequence stripping, secret redaction, truncation, reply
-parsing, every offline omen rule, the Ollama client (success, 404 model, refused
+73 tests cover escape-sequence stripping, secret redaction, truncation, reply
+parsing, every offline omen rule (typos, modules, packages, permissions, ports,
+git upstream, daemons, rust crates), the Ollama client (success, 404 model, refused
 connection), provider resolution (`auto` vs explicit, key precedence, custom
 endpoints), the cloud client (success, 401/429/404, key never leaked, content
-parts), prompt construction, night whispers, and the CLI/fallback paths.
+parts), prompt construction, night whispers, hook installers, and CLI paths.
 
 ---
 
@@ -491,12 +538,17 @@ parts), prompt construction, night whispers, and the CLI/fallback paths.
 
 ```
 PhantomShell/
+├── .github/
+│   └── workflows/
+│       └── test.yml      # multi-platform CI (Linux, macOS, Windows)
 ├── haunt.py              # the ghost: CLI, Ollama + cloud clients, omen engine, renderer
 ├── shell/
 │   ├── phantom.bash      # bash + zsh hook (PROMPT_COMMAND / precmd)
+│   ├── phantom.fish      # fish shell hook (fish_postexec)
 │   └── phantom.ps1       # PowerShell 5.1+ / 7+ prompt wrapper
 ├── tests/
-│   └── test_haunt.py     # offline unit + integration tests
+│   └── test_haunt.py     # 73 offline unit + integration tests
+├── pyproject.toml        # PEP 517/518 package metadata & console entrypoints
 ├── requirements.txt      # rich
 ├── LICENSE               # MIT
 └── README.md

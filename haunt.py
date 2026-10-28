@@ -207,6 +207,14 @@ OFFLINE_WHISPERS = {
         "You named a place that does not exist, and the filesystem answered with a cold draft.",
         "The path you walked has been forgotten by the disk itself.",
     ),
+    "git": (
+        "You attempted to push into the great sea, but no lighthouse was lit on the other side.",
+        "The history branch wavers in the ether, unconnected to any remote star.",
+    ),
+    "daemon": (
+        "The deep service sleeps in its tomb; no daemon answers your pulse.",
+        "A background leviathan has ceased its breathing. You must wake it first.",
+    ),
     "generic": (
         "The oracle sleeps, so the bones were read instead, and the bones are cold tonight.",
         "No ghost answered the summons, so the house creaked a guess for you.",
@@ -848,6 +856,23 @@ def offline_omen(command: str, error: str, shell: str) -> Omen:
                 f"'{name}' is no longer exported by '{package}'.",
             )
 
+    if "cannot find module" in text or "cannot find package" in text or "err_module_not_found" in text:
+        match = re.search(r"cannot find (?:module|package)\s+['\"]([^'\"]+)['\"]", error, re.I)
+        if match:
+            raw_mod = match.group(1).strip()
+            if raw_mod.startswith("@"):
+                parts = raw_mod.split("/")
+                pkg = f"{parts[0]}/{parts[1]}" if len(parts) > 1 else parts[0]
+            else:
+                pkg = raw_mod.split("/")[0]
+            if "pnpm" in cmd:
+                fix = f"pnpm add {pkg}"
+            elif "yarn" in cmd:
+                fix = f"yarn add {pkg}"
+            else:
+                fix = f"npm install {pkg}"
+            return Omen("module", fix, f"Missing Node module '{pkg}'.")
+
     if "address already in use" in text or "eaddrinuse" in text:
         match = re.search(r"(?:address already in use|eaddrinuse)[^\d]{0,12}(\d{2,5})", text, re.S)
         port = match.group(1) if match else None
@@ -874,6 +899,11 @@ def offline_omen(command: str, error: str, shell: str) -> Omen:
             return Omen("permission", None, "Even the root ghost is barred. The file's owner is someone else.")
         return Omen("permission", f"sudo {cmd}", "The gate is barred to mortals. Borrow root's hand.")
 
+    if "cannot connect to the docker daemon" in text or "is the docker daemon running" in text:
+        if is_windows:
+            return Omen("daemon", None, "The Docker daemon sleeps. Awaken Docker Desktop to continue.")
+        return Omen("daemon", "sudo systemctl start docker", "The Docker daemon sleeps. Awaken the daemon to continue.")
+
     if code == 130:
         return Omen("generic", None, "The spell was interrupted. The machine is unharmed.")
     if code in {137, -9}:
@@ -884,8 +914,27 @@ def offline_omen(command: str, error: str, shell: str) -> Omen:
     if "not a git repository" in text:
         return Omen("path", "git init", "You stand in a house that git does not remember building.")
 
+    if "has no upstream branch" in text or "no configured push destination" in text:
+        match = re.search(r"branch\s+([A-Za-z0-9_./-]+)\s+has no upstream branch", error, re.I)
+        branch = match.group(1) if match else "main"
+        return Omen(
+            "git",
+            f"git push --set-upstream origin {branch}",
+            f"Branch '{branch}' has no upstream anchor in the cloud.",
+        )
+
     if "enoent" in text and "package.json" in text:
         return Omen("path", "npm init -y", "There is no package.json here. The ritual requires a document.")
+
+    if "unresolved import" in text or "can't find crate for" in text or "cannot find crate" in text:
+        match = re.search(r"(?:unresolved import|can't find crate for|cannot find crate)\s+[`'\"]?([A-Za-z0-9_]+)", error, re.I)
+        if match and ("cargo" in cmd or "cargo" in text or "rustc" in text):
+            crate = match.group(1)
+            return Omen(
+                "module",
+                f"cargo add {crate}",
+                f"Missing Rust crate '{crate}'. Summon it into Cargo.toml.",
+            )
 
     if "no such file or directory" in text or "cannot access" in text or "cannot find path" in text:
         match = re.search(r"['\"]?([^\s:'\"]+)['\"]?: (?:No such file or directory|cannot access)", error)
@@ -928,6 +977,73 @@ def detect_shell() -> str:
     if shell in {"bash", "zsh", "fish", "sh", "dash", "ksh"}:
         return shell
     return "bash"
+
+
+def get_hook_snippet(shell: str, repo_dir: str | None = None) -> tuple[str, str]:
+    """Return the configuration snippet and profile path for a given shell."""
+    shell = shell.lower().strip()
+    root = (repo_dir or os.path.abspath(os.path.dirname(__file__))).replace("\\", "/")
+
+    if shell in {"bash", "sh", "dash"}:
+        path = os.path.normpath(os.path.expanduser("~/.bashrc"))
+        snippet = f'[ -f "{root}/shell/phantom.bash" ] && source "{root}/shell/phantom.bash"'
+        return snippet, path
+
+    if shell == "zsh":
+        path = os.path.normpath(os.path.expanduser("~/.zshrc"))
+        snippet = f'[ -f "{root}/shell/phantom.bash" ] && source "{root}/shell/phantom.bash"'
+        return snippet, path
+
+    if shell == "fish":
+        path = os.path.normpath(os.path.expanduser("~/.config/fish/config.fish"))
+        snippet = f'test -f "{root}/shell/phantom.fish"; and source "{root}/shell/phantom.fish"'
+        return snippet, path
+
+    if shell in {"powershell", "pwsh"}:
+        if platform.system() == "Windows":
+            user_profile = os.environ.get("USERPROFILE", os.path.expanduser("~"))
+            pwsh_dir = os.path.join(user_profile, "Documents", "PowerShell")
+            win_pwsh_dir = os.path.join(user_profile, "Documents", "WindowsPowerShell")
+            if os.path.isdir(pwsh_dir):
+                path = os.path.join(pwsh_dir, "Microsoft.PowerShell_profile.ps1")
+            elif os.path.isdir(win_pwsh_dir):
+                path = os.path.join(win_pwsh_dir, "Microsoft.PowerShell_profile.ps1")
+            else:
+                path = os.path.join(pwsh_dir, "Microsoft.PowerShell_profile.ps1")
+        else:
+            path = os.path.expanduser("~/.config/powershell/Microsoft.PowerShell_profile.ps1")
+        path = os.path.normpath(path)
+        win_root = root.replace("/", "\\")
+        snippet = f"if (Test-Path '{win_root}\\shell\\phantom.ps1') {{ . '{win_root}\\shell\\phantom.ps1' }}"
+        return snippet, path
+
+    # Default to bash
+    path = os.path.normpath(os.path.expanduser("~/.bashrc"))
+    snippet = f'[ -f "{root}/shell/phantom.bash" ] && source "{root}/shell/phantom.bash"'
+    return snippet, path
+
+
+def install_hook(shell: str, repo_dir: str | None = None) -> tuple[bool, str]:
+    """Safely append the hook invocation to the user's shell configuration file."""
+    snippet, path = get_hook_snippet(shell, repo_dir)
+    target = os.path.abspath(path)
+
+    if os.path.exists(target):
+        try:
+            with open(target, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            if "phantom.bash" in content or "phantom.ps1" in content or "phantom.fish" in content:
+                return False, f"PhantomShell hook is already present in {target}"
+        except Exception as exc:
+            return False, f"Could not read {target}: {exc}"
+
+    try:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "a", encoding="utf-8") as f:
+            f.write(f"\n# PhantomShell: The Haunted Terminal\n{snippet}\n")
+        return True, f"PhantomShell hook successfully summoned into {target}"
+    except Exception as exc:
+        return False, f"Failed to install hook into {target}: {exc}"
 
 
 def build_prompt(command: str, error: str, shell: str, cwd: str) -> str:
@@ -1119,7 +1235,7 @@ def build_haunt(args: argparse.Namespace, rng: random.Random) -> Haunt:
 
     if args.offline:
         offline = True
-        whisper = rng.choice(OFFLINE_WHISPERS[omen.category])
+        whisper = rng.choice(OFFLINE_WHISPERS.get(omen.category, OFFLINE_WHISPERS["generic"]))
         fix = omen.fix
         note = omen.hint
     else:
@@ -1128,7 +1244,7 @@ def build_haunt(args: argparse.Namespace, rng: random.Random) -> Haunt:
             reply = client.generate(build_prompt(command, error, shell, cwd))
         except GhostUnavailable as exc:
             offline = True
-            whisper = rng.choice(OFFLINE_WHISPERS[omen.category])
+            whisper = rng.choice(OFFLINE_WHISPERS.get(omen.category, OFFLINE_WHISPERS["generic"]))
             fix = omen.fix
             reason = str(exc)
             note = f"{reason[:1].upper()}{reason[1:]}. The omen below was read from the bones."
@@ -1227,6 +1343,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=_env_int("PHANTOM_SEED", -1),
         help="seed the apparition and wording (for reproducible demos)",
     )
+    parser.add_argument(
+        "--show-hook",
+        nargs="?",
+        const="auto",
+        choices=("auto", "bash", "zsh", "powershell", "pwsh", "fish"),
+        metavar="SHELL",
+        help="print the shell configuration line for the specified shell (or auto)",
+    )
+    parser.add_argument(
+        "--install-hook",
+        nargs="?",
+        const="auto",
+        choices=("auto", "bash", "zsh", "powershell", "pwsh", "fish"),
+        metavar="SHELL",
+        help="safely install the PhantomShell hook into your shell profile (or auto)",
+    )
     parser.add_argument("--version", action="version", version=f"PhantomShell {__version__}")
     return parser.parse_args(argv)
 
@@ -1234,6 +1366,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def run(argv: list[str] | None = None, console: "Console | None" = None) -> int:
     args = parse_args(argv)
     rng = random.Random(args.seed) if args.seed >= 0 else random.Random()
+
+    if args.show_hook:
+        shell = detect_shell() if args.show_hook == "auto" else args.show_hook
+        snippet, path = get_hook_snippet(shell)
+        print(f"# Add this line to {path}:")
+        print(snippet)
+        return 0
+
+    if args.install_hook:
+        shell = detect_shell() if args.install_hook == "auto" else args.install_hook
+        success, message = install_hook(shell)
+        if _HAVE_RICH and console:
+            console.print(f"[bold green]{message}[/bold green]" if success else f"[dim]{message}[/dim]")
+        else:
+            print(message)
+        return 0
 
     # Late-night flavour after a successful command. Silent unless it is late;
     # the hook is responsible for the random roll so the ghost is not a nag.

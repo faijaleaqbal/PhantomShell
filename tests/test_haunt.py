@@ -183,6 +183,52 @@ class OfflineOmenTests(unittest.TestCase):
     def test_closest_command_is_case_insensitive(self) -> None:
         self.assertEqual(haunt.closest_command("GIT"), "git")
 
+    def test_node_missing_module_suggests_npm_install(self) -> None:
+        omen = haunt.offline_omen("node index.js", "Error: Cannot find module 'express'", "bash")
+        self.assertEqual(omen.category, "module")
+        self.assertEqual(omen.fix, "npm install express")
+
+    def test_node_missing_scoped_module(self) -> None:
+        omen = haunt.offline_omen("node index.js", "Cannot find package '@types/node'", "bash")
+        self.assertEqual(omen.fix, "npm install @types/node")
+
+    def test_node_yarn_detects_package_manager(self) -> None:
+        omen = haunt.offline_omen("yarn start", "Error: Cannot find module 'lodash'", "bash")
+        self.assertEqual(omen.fix, "yarn add lodash")
+
+    def test_git_push_upstream_omen(self) -> None:
+        omen = haunt.offline_omen(
+            "git push",
+            "fatal: The current branch feature-ghost has no upstream branch.",
+            "bash",
+        )
+        self.assertEqual(omen.category, "git")
+        self.assertEqual(omen.fix, "git push --set-upstream origin feature-ghost")
+
+    def test_docker_daemon_not_running_linux(self) -> None:
+        omen = haunt.offline_omen(
+            "docker ps",
+            "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
+            "bash",
+        )
+        self.assertEqual(omen.category, "daemon")
+        self.assertEqual(omen.fix, "sudo systemctl start docker")
+
+    def test_docker_daemon_not_running_windows(self) -> None:
+        omen = haunt.offline_omen(
+            "docker ps",
+            "Cannot connect to the Docker daemon at npipe:////./pipe/docker_engine. Is the docker daemon running?",
+            "powershell",
+        )
+        self.assertEqual(omen.category, "daemon")
+        self.assertIsNone(omen.fix)
+        self.assertIn("Docker Desktop", omen.hint or "")
+
+    def test_rust_missing_crate_suggests_cargo_add(self) -> None:
+        omen = haunt.offline_omen("cargo build", "error[E0432]: unresolved import 'serde'", "bash")
+        self.assertEqual(omen.category, "module")
+        self.assertEqual(omen.fix, "cargo add serde")
+
 
 class _FakeOllama(BaseHTTPRequestHandler):
     """A 20-line stand-in for `ollama serve`, used only by the tests."""
@@ -624,6 +670,58 @@ class CliTests(unittest.TestCase):
         )
         self.assertTrue(any(art in with_art for art in haunt.ARTWORKS))
         self.assertFalse(any(art in without_art for art in haunt.ARTWORKS))
+
+
+class HookInstallationTests(unittest.TestCase):
+    def test_get_hook_snippet_bash(self) -> None:
+        snippet, path = haunt.get_hook_snippet("bash", repo_dir="/opt/PhantomShell")
+        self.assertIn("phantom.bash", snippet)
+        self.assertTrue(path.endswith(".bashrc"))
+
+    def test_get_hook_snippet_zsh(self) -> None:
+        snippet, path = haunt.get_hook_snippet("zsh", repo_dir="/opt/PhantomShell")
+        self.assertIn("phantom.bash", snippet)
+        self.assertTrue(path.endswith(".zshrc"))
+
+    def test_get_hook_snippet_fish(self) -> None:
+        snippet, path = haunt.get_hook_snippet("fish", repo_dir="/opt/PhantomShell")
+        self.assertIn("phantom.fish", snippet)
+        self.assertTrue(path.endswith("config.fish"))
+
+    def test_get_hook_snippet_powershell(self) -> None:
+        snippet, path = haunt.get_hook_snippet("powershell", repo_dir="D:\\PhantomShell")
+        self.assertIn("phantom.ps1", snippet)
+        self.assertTrue(path.endswith("profile.ps1"))
+
+    def test_install_hook_into_temporary_file(self) -> None:
+        import tempfile
+        import os
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_profile = os.path.join(tmpdir, "test_profile")
+            with mock.patch("haunt.get_hook_snippet", return_value=('source /dummy/phantom.bash', fake_profile)):
+                success, msg = haunt.install_hook("bash")
+                self.assertTrue(success)
+                self.assertIn("successfully summoned", msg)
+                self.assertTrue(os.path.exists(fake_profile))
+
+                # Second install detects it is already present
+                success2, msg2 = haunt.install_hook("bash")
+                self.assertFalse(success2)
+                self.assertIn("already present", msg2)
+
+    def test_fish_hook_script_syntax_and_contents(self) -> None:
+        fish_path = Path(__file__).resolve().parents[1] / "shell" / "phantom.fish"
+        self.assertTrue(fish_path.exists())
+        content = fish_path.read_text(encoding="utf-8")
+        self.assertIn("fish_postexec", content)
+        self.assertIn("haunt.py", content)
+
+    def test_show_hook_cli_exits_zero(self) -> None:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = haunt.run(["--show-hook", "fish"])
+        self.assertEqual(code, 0)
+        self.assertIn("phantom.fish", buf.getvalue())
 
 
 if __name__ == "__main__":

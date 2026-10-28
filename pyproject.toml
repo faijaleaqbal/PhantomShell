@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phantomshell"
+version = "1.1.0"
+description = "The Haunted Terminal: an offline-first CLI ghost that whispers fixes for failed commands"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "Faijal Eqbal", email = "faijaleaqbal@gmail.com" }
+]
+keywords = [
+    "cli",
+    "shell",
+    "terminal",
+    "ai",
+    "ollama",
+    "gemma",
+    "groq",
+    "developer-tools",
+    "hacktoberfest"
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Shells",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/faijaleaqbal/PhantomShell"
+Repository = "https://github.com/faijaleaqbal/PhantomShell"
+Issues = "https://github.com/faijaleaqbal/PhantomShell/issues"
+
+[project.scripts]
+phantomshell = "haunt:main"
+haunt = "haunt:main"
+
+[tool.setuptools]
+py-modules = ["haunt"]
+
+[tool.setuptools.package-data]
+"*" = ["shell/*"]
+
