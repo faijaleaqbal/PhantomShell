@@ -76,7 +76,7 @@ __version__ = "1.1.0"
 FENCE = "```"
 
 DEFAULT_HOST = "http://127.0.0.1:11434"
-PREFERRED_MODELS = ("qwen2.5-coder:1.5b", "llama3.2:1b")
+PREFERRED_MODELS = ("qwen2.5-coder:1.5b", "gemma3:4b", "llama3.2:1b")
 FALLBACK_MODEL = PREFERRED_MODELS[0]
 MAX_ERROR_CHARS = 2000
 MAX_COMMAND_CHARS = 400

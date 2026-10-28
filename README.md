@@ -10,8 +10,11 @@ through [Ollama](https://ollama.com) — no API keys, no telemetry, no network.
 Flip one environment variable and the same ghost can consult Groq, OpenAI,
 OpenRouter, Gemini, DeepSeek or any OpenAI-compatible endpoint.
 
-Built for the **Ghost in the Machine** hackathon. Designed to survive a demo
-with the Wi-Fi off — the omen engine needs no model at all.
+Built for the **Ghost in the Machine** hackathon — the
+[Hacktoberfest Open-Source AI Challenge, Week 4](https://dev.to/challenges/hf26).
+Designed to survive a demo with the Wi-Fi off — the omen engine needs no model at all.
+
+![PhantomShell haunting a shell](docs/phantomshell-demo.png)
 
 ```
        .-.
@@ -41,7 +44,7 @@ with the Wi-Fi off — the omen engine needs no model at all.
 |---|---|
 | **Local by default** | Default backend is `127.0.0.1:11434`. Proxies are explicitly bypassed so a local daemon never leaks through `HTTP_PROXY`. |
 | **Cloud optional** | `--provider groq` (or `openai`, `openrouter`, `gemini`, `deepseek`, `custom`) uses one OpenAI-compatible adapter. Keys are read from env vars only, never stored or printed. |
-| **Small models** | Locally, auto-detects `qwen2.5-coder:1.5b` or `llama3.2:1b`, keeps them warm for 30 minutes. Fast on CPU. |
+| **Small models** | Locally, auto-detects `qwen2.5-coder:1.5b`, `gemma3:4b` or `llama3.2:1b`, keeps them warm for 30 minutes. Fast on CPU. |
 | **Never executes anything** | It prints a suggested command. You decide whether to run it. |
 | **Never breaks your shell** | Always exits `0`, bounded timeout, no tracebacks, restores your exit code, skips `Ctrl+C`, one haunt per history entry. |
 | **Degrades in character** | If the model is asleep (or the API key is wrong), a deterministic "omen engine" still fixes typos, missing Python modules, permissions, busy ports and bad paths. |
@@ -57,8 +60,14 @@ with the Wi-Fi off — the omen engine needs no model at all.
 ```bash
 # macOS / Linux / Windows: https://ollama.com/download
 ollama pull qwen2.5-coder:1.5b     # best at shell syntax (recommended)
+ollama pull gemma3:4b              # Google's open-weight model, best prose
 # or: ollama pull llama3.2:1b      # chattier, slightly better prose
 ```
+
+> **Gemma 3** works out of the box — it is an open-weight model with a permissive
+> licence, and it is what the demo screenshots in `docs/` were generated with:
+> `python haunt.py "gti status" "gti: command not found" --model gemma3:4b`.
+> Any Ollama model works; `--model` takes whatever you have pulled.
 
 Ollama usually runs as a background service. If not:
 
@@ -437,13 +446,13 @@ python haunt.py "gti status" "command not found"
 | Symptom | Fix |
 |---|---|
 | `No ghost answers at http://127.0.0.1:11434` | Start Ollama: `ollama serve` (or launch the desktop app). |
-| `the model '…' is not installed` | `ollama pull qwen2.5-coder:1.5b` (or `llama3.2:1b`). |
+| `the model '…' is not installed` | `ollama pull gemma3:4b` (or `qwen2.5-coder:1.5b`, `llama3.2:1b`). |
 | `groq rejected the API key (HTTP 401)` | The key is wrong, expired, or has no access to that model. Re-create it at [console.groq.com/keys](https://console.groq.com/keys) and export it in this shell (`echo $env:GROQ_API_KEY` / `echo $GROQ_API_KEY`). |
 | `no API key for groq; set GROQ_API_KEY or PHANTOM_API_KEY` | Export the key, or pass `--provider ollama` / `--offline`. Keys are never read from a config file. |
 | `groq is rate-limiting the seance (HTTP 429)` | Free-tier limit hit. Wait a moment, use `--model openai/gpt-oss-120b` for a different bucket, or let it fall back to Ollama. |
 | `model '…' was not found on …` | Wrong model id for that provider. Set `PHANTOM_MODEL` to one your key can use, e.g. `openai/gpt-oss-20b` or `llama-3.3-70b-versatile` on Groq. |
 | Cloud answers but the hook still uses Ollama | The key is not in the environment the shell hook inherits. Export it in the same session, or set `PHANTOM_EXTRA_ARGS="--provider groq"`. |
-| First answer takes 10+ s | Cold model load. Warm it: `ollama run qwen2.5-coder:1.5b "hi"`, or `--timeout 30`. |
+| First answer takes 10+ s | Cold model load. Warm it: `ollama run gemma3:4b "hi"`, or `--timeout 30`. |
 | Ghost never appears | Check the hook is sourced (`echo $PROMPT_COMMAND` / `$PROFILE`), your command really failed, and the code is not in `PHANTOM_SKIP`. |
 | Ghost appears twice | Both the file hook and an inline snippet are active. Keep one. |
 | Garbled art / boxes | Use Windows Terminal, or run with `--no-art`. |
@@ -490,7 +499,8 @@ PhantomShell/
 ## Demo script (60 seconds)
 
 1. `python haunt.py --demo --offline` — instant, Wi-Fi off, still in character.
-2. `python haunt.py --demo` — same failure, now with the local model's whisper.
+2. `python haunt.py --demo` — same failure, now with the local model's whisper
+   (`--model gemma3:4b` to pick Gemma 3 explicitly).
 3. `python haunt.py "gti status" "gti: command not found" --provider groq` — the
    same ghost, cloud-fast (skip this if there is no `GROQ_API_KEY`).
 4. In a real shell: `gti status` → the hook suggests `git status`.
@@ -498,6 +508,36 @@ PhantomShell/
    → copy-paste `python3 -m pip install pyyaml`.
 6. Kill Ollama (`Ctrl+C` in its terminal) and fail something again → the omen
    engine takes over instead of crashing the prompt.
+
+---
+
+## Hackathon submission
+
+**Event:** [Hacktoberfest Open-Source AI Challenge — Week 4: *Ghost in the Machine*](https://dev.to/challenges/hf26)
+(DEV event id `82`, 26–31 Oct 2026)
+
+**Submission post:** <https://dev.to/faijaleaqbal/phantomshell-the-haunted-terminal-that-whispers-the-fix>
+
+**Tags:** `#hf26challenge` `#devchallenge` `#opensource` `#ollama` `#gemma`
+
+**Featured category entry:** *Best Use of Gemma* — the demo screenshots in `docs/`
+were generated with `gemma3:4b`, Google's open-weight model, running locally through
+Ollama. No cloud API was involved.
+
+**Open pieces that make it work**
+
+| Piece | Role | Licence |
+|---|---|---|
+| [Gemma 3 4B](https://ai.google.dev/gemma) | The ghost's voice (open weights) | Gemma terms (open-weight) |
+| [Ollama](https://ollama.com) | Local inference server | MIT |
+| [rich](https://github.com/Textualize/rich) | Terminal rendering | MIT |
+| PhantomShell | The hook, the omen engine, the safety layer | MIT |
+
+**Post-deadline commits:** this project was built and completed inside the
+challenge window (first commit 28 Oct 2026, deadline 31 Oct 2026 23:59 PDT).
+Any commit made after the deadline is listed here:
+
+<!-- post-deadline-commits: none -->
 
 ---
 
