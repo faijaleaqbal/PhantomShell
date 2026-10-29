@@ -576,9 +576,11 @@ PhantomShell/
 **Event:** [Hacktoberfest Open-Source AI Challenge — Week 4: *Ghost in the Machine*](https://dev.to/challenges/hf26)
 (DEV event id `82`, 26–31 Oct 2026)
 
-**Submission post:** <https://dev.to/faijaleaqbal/phantomshell-the-haunted-terminal-that-whispers-the-fix>
+**Submission post:** <https://dev.to/faijaleaqbal/phantomshell-the-haunted-terminal-that-whispers-the-fix-1n29>
 
-**Tags:** `#hf26challenge` `#devchallenge` `#opensource` `#ollama` `#gemma`
+**Agent session:** <https://dev.to/agent_sessions/phantomshell-building-a-haunted-offline-terminal-that-whispers-the-fix-gtqjgu>
+
+**Tags:** `#hf26challenge` `#devchallenge` `#ollama` `#gemma`
 
 **Featured category entry:** *Best Use of Gemma* — the demo screenshots in `docs/`
 were generated with `gemma3:4b`, Google's open-weight model, running locally through
